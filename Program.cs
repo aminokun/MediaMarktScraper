@@ -16,10 +16,11 @@
             static void Main(string[] args)
             {
                 RefreshDatabase();
-                string url = "https://www.mediamarkt.nl/nl/category/smartphones-283.html";
+                string url = "https://www.mediamarkt.nl/nl/category/smartphones-283.html?page=1";
                 var links = GetPhoneLinks(url);
                 List<Phone> Phones = GetPhones(links);
                 ExportToDatabase(Phones);
+
             }
 
             private static void RefreshDatabase()
@@ -54,44 +55,73 @@
 
                 foreach (var item in Phones)
                 {
-                    MySqlCommand command = new MySqlCommand("INSERT INTO phones (ImageUrl, Title, Price) VALUES (@ImageUrl, @Title, @Price)", connection);
+                    MySqlCommand command = new MySqlCommand("INSERT INTO phones (ImageUrl, Title, Price, ArtNr) VALUES (@ImageUrl, @Title, @Price, @ArtNr)", connection);
                     command.Parameters.AddWithValue("@ImageUrl", item.ImageUrl);
                     command.Parameters.AddWithValue("@Title", item.Title);
                     command.Parameters.AddWithValue("@Price", item.Price);
+                    command.Parameters.AddWithValue("@ArtNr", item.ArtNr);
                     command.ExecuteNonQuery();
                 }
                 connection.Close();
 
             }
 
-            private static List<Phone> GetPhones(List<string> links)
+        private static List<Phone> GetPhones(List<string> links)
+        {
+            var Phones = new List<Phone>();
+            foreach (var link in links)
             {
-                var Phones = new List<Phone>();
-                foreach (var link in links)
+                var doc = GetDocument(link);
+                var Phone = new Phone();
+
+
+                var titleNode = doc.DocumentNode.SelectSingleNode("//h1[@color='#3a3a3a']");
+                if (titleNode != null)
                 {
-                    var doc = GetDocument(link);
-                    var Phone = new Phone();
-
-                    Phone.Title = HttpUtility.HtmlDecode(doc.DocumentNode.SelectSingleNode("//h1[@color=\"#000\"]").InnerText);
-
-                    var xpath = "//div[@order=\"0\"]/span[2]";
-                    var price_raw = doc.DocumentNode.SelectSingleNode(xpath).InnerText;
-                    Phone.Price = ExtractPrice(price_raw);
-
-                    // Extract image URL and convert to absolute URL
-                    var imgNode = doc.DocumentNode.SelectSingleNode("//picture/img/@src\r\n");
-                    if (imgNode != null)
-                    {
-                        var imageUrl = imgNode.Attributes["src"]?.Value;
-                        Phone.ImageUrl = imageUrl;
-                    }
-
-                    Phones.Add(Phone);
+                    Phone.Title = HttpUtility.HtmlDecode(titleNode.InnerText.Trim());
                 }
-                return Phones;
-            }
 
-            static double ExtractPrice(string raw)
+                // Extract the Art.-Nr. value
+                var artNrNode = doc.DocumentNode.SelectSingleNode("//p[@data-test='pdp-article-number']");
+                if (artNrNode != null)
+                {
+                    var artNrRaw = artNrNode.InnerText.Trim();
+                    var artNrStr = artNrRaw.Replace("Art.-Nr. ", "");
+                    if (int.TryParse(artNrStr, out var artNr))
+                    {
+                        Phone.ArtNr = artNr;
+                    }
+                    else
+                    {
+                        Console.WriteLine(ErrorEventArgs.Empty);
+                    }
+                }
+
+                var xpath = "//span[@data-test='branded-price-whole-value']";
+                var priceNode = doc.DocumentNode.SelectSingleNode(xpath);
+                if (priceNode != null)
+                {
+                    var priceRaw = priceNode.InnerText.Trim();
+                    var priceStr = priceRaw.Replace("€", ""); // remove the euro symbol
+                    var price = decimal.Parse(priceStr, CultureInfo.InvariantCulture);
+                    Phone.Price = price;
+                }
+
+
+                // Extract image URL and convert to absolute URL
+                var imgNode = doc.DocumentNode.SelectSingleNode("//picture/img/@src\r\n");
+                if (imgNode != null)
+                {
+                    var imageUrl = imgNode.Attributes["src"]?.Value;
+                    Phone.ImageUrl = imageUrl;
+                }
+
+                Phones.Add(Phone);
+            }
+            return Phones;
+        }
+
+        static double ExtractPrice(string raw)
             {
                 var reg = new Regex(@"[\d\.,]+", RegexOptions.Compiled);
                 var m = reg.Match(raw);
